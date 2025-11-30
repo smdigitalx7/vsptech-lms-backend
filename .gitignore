@@ -75,6 +75,8 @@ logs/
 credentials.txt
 
 # Docker
+Dockerfile
+docker-compose.yml
 docker-compose.override.yml
 
 # Alembic
