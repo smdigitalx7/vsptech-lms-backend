@@ -1,33 +1,20 @@
-from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+"""User schemas."""
+from pydantic import EmailStr, Field
 from typing import Optional
+from .base import BaseSchema
 
 
-class UserBase(BaseModel):
-    """Base user schema."""
+class RegisterAdminRequest(BaseSchema):
+    """Register admin request schema."""
     email: EmailStr
-    full_name: str = Field(..., min_length=1, max_length=255)
-
-
-class UserCreate(UserBase):
-    """User creation schema."""
     password: str = Field(..., min_length=8)
+    full_name: str = Field(..., min_length=1, max_length=255)
+    college_id: int = Field(..., description="College ID to associate the admin with")
 
 
-class UserUpdate(BaseModel):
-    """User update schema."""
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
-    is_active: Optional[bool] = None
-
-
-class UserResponse(UserBase):
-    """User response schema."""
-    user_id: int
-    is_active: bool
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
+class AssociateUserWithCollegeRequest(BaseSchema):
+    """Associate user with college request schema."""
+    user_id: int = Field(..., description="User ID to associate with college")
+    college_id: int = Field(..., description="College ID to associate the user with")
+    is_primary: Optional[bool] = Field(default=False, description="Whether this is the primary college for the user")
 

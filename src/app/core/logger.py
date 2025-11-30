@@ -8,37 +8,63 @@ import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Resolve a writable log directory; fall back gracefully inside containers
-def _resolve_log_paths() -> dict[str, Optional[str]]:
-    base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
-    try:
-        if not os.path.exists(base_dir):
-            os.makedirs(base_dir)
-        return {
-            "app": os.path.join(base_dir, "app.log"),
-            "error": os.path.join(base_dir, "error.log"),
-            "access": os.path.join(base_dir, "access.log"),
-            "database": os.path.join(base_dir, "database.log"),
-            "security": os.path.join(base_dir, "security.log")
-        }
-    except PermissionError:
-        # Try /tmp as a safe writable directory in containers
-        tmp_dir = "/tmp/fastapi-logs"
-        try:
-            if not os.path.exists(tmp_dir):
-                os.makedirs(tmp_dir)
-            return {
-                "app": os.path.join(tmp_dir, "app.log"),
-                "error": os.path.join(tmp_dir, "error.log"),
-                "access": os.path.join(tmp_dir, "access.log"),
-                "database": os.path.join(tmp_dir, "database.log"),
-                "security": os.path.join(tmp_dir, "security.log")
-            }
-        except Exception:
-            # Give up on file logging
-            return {key: None for key in ["app", "error", "access", "database", "security"]}
+# ============================================================================
+# Constants
+# ============================================================================
+# Default log rotation settings
+DEFAULT_LOG_MAX_SIZE = 10 * 1024 * 1024  # 10MB
+DEFAULT_LOG_BACKUP_COUNT = 5
+DEFAULT_LOG_RETENTION_DAYS = 30
+DEFAULT_LOG_CLEANUP_INTERVAL_HOURS = 24  # Run cleanup once per day
 
-LOG_FILE_PATHS: dict[str, Optional[str]] = _resolve_log_paths()
+# ============================================================================
+# Helper Functions
+# ============================================================================
+# Resolve a writable log directory
+def _resolve_log_paths() -> dict[str, Optional[str]]:
+    """
+    Resolve log directory paths.
+    Tries /app/logs for Docker, then local logs directory (src/app/logs).
+    Does not fall back to /tmp to ensure logs are stored in proper locations.
+    """
+    # Get the app directory (one level up from core/logger.py)
+    # This points to src/app/logs which is the existing logs directory
+    app_dir = os.path.dirname(os.path.dirname(__file__))
+    local_logs_dir = os.path.join(app_dir, "logs")
+    
+    # Try Docker logs directory first, then local logs directory
+    log_dirs = [
+        "/app/logs",  # Docker volume mount (writable)
+        local_logs_dir,  # Local development - src/app/logs
+    ]
+    
+    for base_dir in log_dirs:
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(base_dir, exist_ok=True)
+            # Test write permissions
+            test_file = os.path.join(base_dir, ".write_test")
+            try:
+                with open(test_file, "w") as f:
+                    f.write("test")
+                os.remove(test_file)
+                # If we get here, directory is writable
+                return {
+                    "app": os.path.join(base_dir, "app.log"),
+                    "error": os.path.join(base_dir, "error.log"),
+                    "access": os.path.join(base_dir, "access.log"),
+                    "database": os.path.join(base_dir, "database.log"),
+                    "security": os.path.join(base_dir, "security.log")
+                }
+            except (PermissionError, OSError):
+                continue
+        except (PermissionError, OSError):
+            continue
+    
+    # If no writable directory found, return None for all paths
+    # This will cause logging to only use console output
+    return {key: None for key in ["app", "error", "access", "database", "security"]}
+
 
 # Get logging level from config or environment variable
 def _get_logging_level() -> int:
@@ -58,17 +84,21 @@ def _get_logging_level() -> int:
         # Fallback to DEBUG environment variable if config not available
         return logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
 
+
+# ============================================================================
+# Module-level Variables (initialized after helper functions)
+# ============================================================================
+LOG_FILE_PATHS: dict[str, Optional[str]] = _resolve_log_paths()
 LOGGING_LEVEL = _get_logging_level()
 
 # Global queue and listener for async logging
 _log_queue: Optional[queue.Queue[logging.LogRecord]] = None
 _log_listener: Optional[QueueListener] = None
 
-# Default log rotation settings
-DEFAULT_LOG_MAX_SIZE = 10 * 1024 * 1024  # 10MB
-DEFAULT_LOG_BACKUP_COUNT = 5
-DEFAULT_LOG_RETENTION_DAYS = 30
 
+# ============================================================================
+# Configuration Functions
+# ============================================================================
 def _get_log_config() -> dict[str, Any]:
     """Get log configuration from settings, with fallback to defaults."""
     try:
@@ -87,22 +117,83 @@ def _get_log_config() -> dict[str, Any]:
             "log_format": "json",
         }
 
-def _cleanup_old_logs(log_dir: str, retention_days: int) -> None:
-    """Clean up log files older than retention_days."""
+def _cleanup_old_logs(log_dir: str, retention_days: int) -> dict[str, int]:
+    """
+    Clean up log files older than retention_days.
+    
+    This function removes log files (including rotated backups like .log.1, .log.2, etc.)
+    that are older than the specified retention period.
+    
+    Returns:
+        Dictionary with 'deleted' and 'kept' counts
+    """
     if not log_dir or not os.path.exists(log_dir):
-        return
+        return {"deleted": 0, "kept": 0}
+    
     try:
         cutoff_time = datetime.now() - timedelta(days=retention_days)
         log_path = Path(log_dir)
+        deleted_count = 0
+        kept_count = 0
+        
+        # Find all log files including rotated backups (*.log, *.log.1, *.log.2, etc.)
         for log_file in log_path.glob("*.log*"):
             try:
                 file_mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
                 if file_mtime < cutoff_time:
                     log_file.unlink()
+                    deleted_count += 1
+                else:
+                    kept_count += 1
             except (OSError, ValueError):
                 continue
+        
+        return {"deleted": deleted_count, "kept": kept_count}
     except Exception:
-        pass
+        return {"deleted": 0, "kept": 0}
+
+
+async def run_periodic_log_cleanup(interval_hours: int = DEFAULT_LOG_CLEANUP_INTERVAL_HOURS) -> None:
+    """
+    Background task to periodically clean up old log files.
+    
+    Args:
+        interval_hours: Hours between cleanup runs (default: 24 hours)
+    """
+    import asyncio
+    
+    logger = get_app_logger("log_cleanup")
+    
+    while True:
+        try:
+            await asyncio.sleep(interval_hours * 3600)  # Convert hours to seconds
+            
+            log_config = _get_log_config()
+            retention_days = log_config.get("retention_days", DEFAULT_LOG_RETENTION_DAYS)
+            log_paths = LOG_FILE_PATHS
+            
+            total_deleted = 0
+            total_kept = 0
+            
+            for log_path in log_paths.values():
+                if log_path:
+                    log_dir = os.path.dirname(log_path)
+                    result = _cleanup_old_logs(log_dir, retention_days)
+                    total_deleted += result["deleted"]
+                    total_kept += result["kept"]
+            
+            if total_deleted > 0:
+                logger.info(
+                    f"Automatic log cleanup completed: {total_deleted} file(s) deleted, "
+                    f"{total_kept} file(s) kept (retention: {retention_days} days)"
+                )
+        except asyncio.CancelledError:
+            logger.info("Log cleanup task cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error during automatic log cleanup: {e}", exc_info=True)
+            # Continue running even if cleanup fails
+            await asyncio.sleep(3600)  # Wait 1 hour before retrying on error
 
 class JSONFormatter(logging.Formatter):
     """Custom JSON formatter for structured logging."""
@@ -157,6 +248,19 @@ class TextFormatter(logging.Formatter):
         )
 
 
+class CategoryFilter(logging.Filter):
+    """Filter logs by category to route them to the correct file."""
+    
+    def __init__(self, category: str):
+        super().__init__()
+        self.category = category
+    
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return True if the log record matches this category."""
+        record_category = getattr(record, 'category', 'app')
+        return record_category == self.category
+
+
 def _get_formatter(log_format: str = "json") -> logging.Formatter:
     """Get formatter based on log format setting."""
     if log_format.lower() == "text":
@@ -181,7 +285,8 @@ def _setup_async_logging() -> None:
     console_handler.setFormatter(formatter)
     handlers.append(console_handler)
     
-    for _, log_path in LOG_FILE_PATHS.items():
+    # Create category-specific file handlers with filters
+    for category, log_path in LOG_FILE_PATHS.items():
         if log_path:
             try:
                 log_dir = os.path.dirname(log_path)
@@ -194,6 +299,8 @@ def _setup_async_logging() -> None:
                 )
                 file_handler.setLevel(LOGGING_LEVEL)
                 file_handler.setFormatter(formatter)
+                # Add category filter so only logs of this category go to this file
+                file_handler.addFilter(CategoryFilter(category))
                 handlers.append(file_handler)
                 
                 _cleanup_old_logs(log_dir, log_config["retention_days"])
@@ -239,10 +346,12 @@ class StructuredLogger:
     def _log_with_context(self, level: int, message: str, **kwargs: Any) -> None:
         """Log with additional context."""
         exc_info = kwargs.pop('exc_info', None)
+        # Add category to extra so filters can route to correct file
+        kwargs['category'] = self.category
         if kwargs:
             self.logger.log(level, message, extra=kwargs, exc_info=exc_info)
         else:
-            self.logger.log(level, message, exc_info=exc_info)
+            self.logger.log(level, message, extra={'category': self.category}, exc_info=exc_info)
     
     def info(self, message: str, **kwargs: Any) -> None:
         """Log info message with context."""

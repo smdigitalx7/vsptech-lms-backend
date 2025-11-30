@@ -1,33 +1,31 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import EmailStr, Field
+from .base import BaseSchema
 
 
-class AccessTokenDetails(BaseModel):
+class AccessTokenDetails(BaseSchema):
     """Access token payload details."""
     user_id: int
     email: str
+    roles: list[str] = Field(default_factory=list, description="List of user role names")
 
 
-class RefreshTokenDetails(BaseModel):
+class RefreshTokenDetails(BaseSchema):
     """Refresh token payload details."""
     user_id: int
 
 
-class LoginRequest(BaseModel):
+class LoginRequest(BaseSchema):
     """Login request schema."""
     email: EmailStr
     password: str = Field(..., min_length=8)
 
 
-class RegisterRequest(BaseModel):
-    """User registration request schema."""
-    email: EmailStr
-    password: str = Field(..., min_length=8)
-    full_name: str = Field(..., min_length=1, max_length=255)
-
-
-class TokenResponse(BaseModel):
+class TokenResponse(BaseSchema):
     """Token response schema."""
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+    user_id: int = Field(..., description="User ID")
+    email: str = Field(..., description="User email")
+    roles: list[str] = Field(default_factory=list, description="List of user role names")
 

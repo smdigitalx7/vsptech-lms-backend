@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any, AsyncContextManager
+import asyncio
 import anyio
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -77,6 +78,7 @@ def lifespan_factory() -> Callable[[FastAPI], AsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         from asyncio import Event
+        from app.core.logger import run_periodic_log_cleanup, DEFAULT_LOG_CLEANUP_INTERVAL_HOURS
 
         initialization_complete = Event()
         app.state.initialization_complete = initialization_complete
@@ -84,6 +86,10 @@ def lifespan_factory() -> Callable[[FastAPI], AsyncContextManager[None]]:
         # Set thread pool tokens from settings
         await set_threadpool_tokens(getattr(settings, 'thread_pool_tokens', DEFAULT_THREAD_POOL_TOKENS))
 
+        # Start background log cleanup task
+        cleanup_interval = getattr(settings, 'log_cleanup_interval_hours', DEFAULT_LOG_CLEANUP_INTERVAL_HOURS)
+        cleanup_task: asyncio.Task[None] | None = None
+        
         try:
             # Initialize Redis cache
             await create_redis_cache_pool()
@@ -103,10 +109,22 @@ def lifespan_factory() -> Callable[[FastAPI], AsyncContextManager[None]]:
                 db_logger.error(f"Database health check error during startup: {e}")
                 error_logger.error(f"Database health check failed: {e}")
 
+            # Start automatic log cleanup task
+            cleanup_task = asyncio.create_task(run_periodic_log_cleanup(cleanup_interval))
+            logger.info(f"Started automatic log cleanup task (interval: {cleanup_interval} hours)")
+
             initialization_complete.set()
             yield
 
         finally:
+            # Cancel log cleanup task
+            if cleanup_task and not cleanup_task.done():
+                cleanup_task.cancel()
+                try:
+                    await cleanup_task
+                except asyncio.CancelledError:
+                    pass
+
             # Cleanup Redis pools
             await close_redis_cache_pool()
             await close_redis_queue_pool()
@@ -163,6 +181,33 @@ def create_application(
 
     # Include routers
     application.include_router(router)
+
+    # Add security scheme to OpenAPI schema for Swagger UI Authorize button
+    # Override the openapi method to include security schemes
+    original_openapi = application.openapi
+
+    def custom_openapi():
+        if application.openapi_schema:
+            return application.openapi_schema
+        openapi_schema = original_openapi()
+        # Ensure components exist
+        if "components" not in openapi_schema:
+            openapi_schema["components"] = {}
+        if "securitySchemes" not in openapi_schema["components"]:
+            openapi_schema["components"]["securitySchemes"] = {}
+        
+        # Add HTTPBearer security scheme
+        openapi_schema["components"]["securitySchemes"]["HTTPBearer"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Enter your JWT access token. Token can be obtained from the /api/v1/auth/login endpoint."
+        }
+        
+        application.openapi_schema = openapi_schema
+        return application.openapi_schema
+
+    application.openapi = custom_openapi
 
     return application
 

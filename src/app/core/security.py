@@ -4,7 +4,10 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, HashingError
 from app.core.config import settings, ARGON2_HASH_PREFIX
+from app.core.logger import get_app_logger
 from app.schemas.auth import AccessTokenDetails, RefreshTokenDetails
+
+logger = get_app_logger(__name__)
 
 
 def _get_argon2_hasher() -> PasswordHasher:
@@ -24,13 +27,34 @@ def _get_argon2_hasher() -> PasswordHasher:
     )
 
 
+def _get_argon2_verifier() -> PasswordHasher:
+    """Get Argon2id password verifier (can verify hashes with any parameters).
+    
+    Note: Argon2 verify() reads parameters from the hash itself, so we can use
+    a default PasswordHasher for verification even if the hash was created with
+    different parameters. Using default parameters ensures maximum compatibility.
+    
+    Returns
+    -------
+    PasswordHasher
+        PasswordHasher instance for verification (parameters don't matter for verify).
+    """
+    # For verification, parameters don't matter - Argon2 reads them from the hash
+    # Using default PasswordHasher() ensures it can verify hashes created with
+    # any valid Argon2 parameters
+    return PasswordHasher()
+
+
 # Initialize Argon2id password hasher with configuration from settings
 _argon2_hasher = _get_argon2_hasher()
+_argon2_verifier = _get_argon2_verifier()
 
 
 def _is_argon2id_hash(hashed_password: str) -> bool:
     """Check if the hash is an Argon2id hash."""
-    return hashed_password.startswith(ARGON2_HASH_PREFIX)
+    if not hashed_password:
+        return False
+    return hashed_password.strip().startswith(ARGON2_HASH_PREFIX)
 
 
 async def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -49,23 +73,32 @@ async def verify_password(plain_password: str, hashed_password: str) -> bool:
         True if password matches, False otherwise.
     """
     if not plain_password or not hashed_password:
+        logger.warning("Password verification failed: empty password or hash")
+        return False
+
+    # Strip whitespace from hash (in case of database storage issues)
+    hashed_password = hashed_password.strip()
+
+    # Check if it's an Argon2id hash
+    if not _is_argon2id_hash(hashed_password):
+        logger.warning(
+            f"Password hash format not recognized. "
+            f"Expected Argon2id hash starting with '{ARGON2_HASH_PREFIX}'"
+        )
         return False
 
     try:
-        # Verify Argon2id hash
-        if _is_argon2id_hash(hashed_password):
-            try:
-                _argon2_hasher.verify(hashed_password, plain_password)
-                return True
-            except VerifyMismatchError:
-                return False
-            except Exception:
-                return False
-
-        # Unknown hash format
+        # Verify Argon2id hash (synchronous call, but function is async for consistency)
+        # Note: verify() reads parameters from the hash itself, so it works with hashes
+        # created with different parameters than the current settings
+        _argon2_verifier.verify(hashed_password, plain_password)
+        return True
+    except VerifyMismatchError:
+        # Password doesn't match - this is expected for wrong passwords
         return False
-
-    except Exception:
+    except Exception as e:
+        # Log unexpected errors for debugging
+        logger.error(f"Password verification error: {type(e).__name__}: {e}", exc_info=True)
         return False
 
 

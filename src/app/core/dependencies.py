@@ -5,8 +5,10 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db_session
 from app.core.utils import cache, queue
-from app.services.user_service import UserService
 from app.services.auth_service import AuthService
+from app.services.college_service import CollegeService
+from app.services.role_service import RoleService
+from app.services.user_service import UserService
 
 
 def get_cache_client() -> Optional[redis.Redis]:
@@ -23,6 +25,18 @@ def get_queue_pool() -> Optional[ArqRedis]:
 def get_auth_service(db: AsyncSession = Depends(get_db_session)) -> AuthService:
     """Get authentication service instance."""
     return AuthService(db)
+
+
+# College Service
+def get_college_service(db: AsyncSession = Depends(get_db_session)) -> CollegeService:
+    """Get college service instance."""
+    return CollegeService(db)
+
+
+# Role Service
+def get_role_service(db: AsyncSession = Depends(get_db_session)) -> RoleService:
+    """Get role service instance."""
+    return RoleService(db)
 
 
 # User Service

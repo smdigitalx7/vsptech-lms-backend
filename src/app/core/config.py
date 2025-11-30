@@ -1,6 +1,7 @@
+import json
 import os
 from enum import Enum
-from typing import Set
+from typing import Any, Set
 from pydantic import SecretStr, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -100,16 +101,16 @@ class Settings(BaseSettings):
 
     # Security Settings
     secret_key: SecretStr = Field(..., min_length=32, description="Secret key for JWT tokens")
-    algorithm: str = Field(default="HS256", description="JWT algorithm")
-    access_token_expire_minutes: int = Field(default=30, ge=1, le=1440, description="Access token expiration in minutes")
-    refresh_token_expire_days: int = Field(default=7, ge=1, le=30, description="Refresh token expiration in days")
+    algorithm: str = Field(..., description="JWT algorithm")
+    access_token_expire_minutes: int = Field(..., ge=1, le=1440, description="Access token expiration in minutes")
+    refresh_token_expire_days: int = Field(..., ge=1, le=30, description="Refresh token expiration in days")
 
     # Argon2id Password Hashing Settings
-    argon2_time_cost: int = Field(default=2, ge=1, le=10, description="Argon2id time cost (iterations)")
-    argon2_memory_cost: int = Field(default=65536, ge=1024, le=1048576, description="Argon2id memory cost in KB")
-    argon2_parallelism: int = Field(default=4, ge=1, le=16, description="Argon2id parallelism (number of threads)")
-    argon2_hash_len: int = Field(default=32, ge=16, le=64, description="Argon2id hash length in bytes")
-    argon2_salt_len: int = Field(default=16, ge=8, le=32, description="Argon2id salt length in bytes")
+    argon2_time_cost: int = Field(..., ge=1, le=10, description="Argon2id time cost (iterations)")
+    argon2_memory_cost: int = Field(..., ge=1024, le=1048576, description="Argon2id memory cost in KB")
+    argon2_parallelism: int = Field(..., ge=1, le=16, description="Argon2id parallelism (number of threads)")
+    argon2_hash_len: int = Field(..., ge=16, le=64, description="Argon2id hash length in bytes")
+    argon2_salt_len: int = Field(..., ge=8, le=32, description="Argon2id salt length in bytes")
 
     # Database Settings
     database_url: str | None = Field(default=None, description="Database URL")
@@ -118,86 +119,109 @@ class Settings(BaseSettings):
     postgres_user: str = Field(..., description="PostgreSQL username")
     postgres_password: str = Field(..., description="PostgreSQL password")
     postgres_server: str = Field(..., description="PostgreSQL server")
-    postgres_port: int = Field(default=5432, ge=1, le=65535, description="PostgreSQL port")
+    postgres_port: int = Field(..., ge=1, le=65535, description="PostgreSQL port")
     postgres_db: str = Field(..., description="PostgreSQL database name")
 
     # Redis Settings
     redis_url: str | None = Field(default=None, description="Redis URL")
-    redis_cache_host: str = Field(default="localhost", description="Redis cache host")
-    redis_cache_port: int = Field(default=6379, ge=1, le=65535, description="Redis cache port")
-    redis_queue_host: str = Field(default="localhost", description="Redis queue host")
-    redis_queue_port: int = Field(default=6379, ge=1, le=65535, description="Redis queue port")
-    redis_rate_limit_host: str = Field(default="localhost", description="Redis rate limit host")
-    redis_rate_limit_port: int = Field(default=6379, ge=1, le=65535, description="Redis rate limit port")
+    redis_cache_host: str = Field(..., description="Redis cache host")
+    redis_cache_port: int = Field(..., ge=1, le=65535, description="Redis cache port")
+    redis_queue_host: str = Field(..., description="Redis queue host")
+    redis_queue_port: int = Field(..., ge=1, le=65535, description="Redis queue port")
+    redis_rate_limit_host: str = Field(..., description="Redis rate limit host")
+    redis_rate_limit_port: int = Field(..., ge=1, le=65535, description="Redis rate limit port")
 
     # Cache Settings
-    client_cache_max_age: int = Field(default=3600, ge=1, le=86400, description="Client cache max age in seconds")
+    client_cache_max_age: int = Field(..., ge=1, le=86400, description="Client cache max age in seconds")
 
     # Rate Limiting
-    default_rate_limit_limit: int = Field(default=100, ge=1, le=10000, description="Default rate limit")
-    default_rate_limit_period: int = Field(default=60, ge=1, le=86400, description="Rate limit period in seconds")
+    default_rate_limit_limit: int = Field(..., ge=1, le=10000, description="Default rate limit")
+    default_rate_limit_period: int = Field(..., ge=1, le=86400, description="Rate limit period in seconds")
 
     # Database Connection Pool
-    db_pool_size: int = Field(default=10, ge=5, le=100, description="Database connection pool size")
-    db_max_overflow: int = Field(default=10, ge=5, le=100, description="Database max overflow connections")
-    db_pool_timeout: int = Field(default=30, ge=5, le=300, description="Database pool timeout in seconds")
-    db_pool_recycle: int = Field(default=3600, ge=300, le=7200, description="Database pool recycle time in seconds")
+    db_pool_size: int = Field(..., ge=5, le=100, description="Database connection pool size")
+    db_max_overflow: int = Field(..., ge=5, le=100, description="Database max overflow connections")
+    db_pool_timeout: int = Field(..., ge=5, le=300, description="Database pool timeout in seconds")
+    db_pool_recycle: int = Field(..., ge=300, le=7200, description="Database pool recycle time in seconds")
 
     # API Configuration
-    default_page_size: int = Field(default=20, ge=1, le=100, description="Default page size for pagination")
-    max_page_size: int = Field(default=100, ge=10, le=1000, description="Maximum page size for pagination")
-    default_page: int = Field(default=1, description="Default page number")
+    default_page_size: int = Field(..., ge=1, le=100, description="Default page size for pagination")
+    max_page_size: int = Field(..., ge=10, le=1000, description="Maximum page size for pagination")
+    default_page: int = Field(..., description="Default page number")
 
     # Thread Pool Configuration
-    thread_pool_tokens: int = Field(default=100, ge=10, le=1000, description="Number of thread pool tokens")
+    thread_pool_tokens: int = Field(..., ge=10, le=1000, description="Number of thread pool tokens")
 
     # Gunicorn Configuration
-    gunicorn_workers: int = Field(default=4, ge=1, le=32, description="Number of Gunicorn worker processes")
-    gunicorn_threads: int = Field(default=2, ge=1, le=8, description="Number of threads per worker")
-    gunicorn_timeout: int = Field(default=120, ge=30, le=300, description="Worker timeout in seconds")
-    gunicorn_graceful_timeout: int = Field(default=30, ge=10, le=120, description="Graceful shutdown timeout in seconds")
-    gunicorn_keep_alive: int = Field(default=5, ge=2, le=30, description="Keep-alive connections timeout in seconds")
-    gunicorn_max_requests: int = Field(default=500, ge=100, le=10000, description="Max requests before worker restart")
-    gunicorn_max_requests_jitter: int = Field(default=25, ge=0, le=100, description="Jitter for max requests to prevent thundering herd")
+    gunicorn_workers: int = Field(..., ge=1, le=32, description="Number of Gunicorn worker processes")
+    gunicorn_threads: int = Field(..., ge=1, le=8, description="Number of threads per worker")
+    gunicorn_timeout: int = Field(..., ge=30, le=300, description="Worker timeout in seconds")
+    gunicorn_graceful_timeout: int = Field(..., ge=10, le=120, description="Graceful shutdown timeout in seconds")
+    gunicorn_keep_alive: int = Field(..., ge=2, le=30, description="Keep-alive connections timeout in seconds")
+    gunicorn_max_requests: int = Field(..., ge=100, le=10000, description="Max requests before worker restart")
+    gunicorn_max_requests_jitter: int = Field(..., ge=0, le=100, description="Jitter for max requests to prevent thundering herd")
 
     # Logging Configuration
-    log_level: str = Field(default="INFO", description="Logging level")
-    log_format: str = Field(default="json", description="Log format (json, text)")
-    log_file_max_size: int = Field(default=10485760, ge=1048576, le=104857600, description="Maximum log file size in bytes")
-    log_file_backup_count: int = Field(default=5, ge=1, le=20, description="Number of backup log files")
-    log_retention_days: int = Field(default=30, ge=1, le=365, description="Log retention period in days")
+    log_level: str = Field(..., description="Logging level")
+    log_format: str = Field(..., description="Log format (json, text)")
+    log_file_max_size: int = Field(..., ge=1048576, le=104857600, description="Maximum log file size in bytes")
+    log_file_backup_count: int = Field(..., ge=1, le=20, description="Number of backup log files")
+    log_retention_days: int = Field(..., ge=1, le=365, description="Log retention period in days")
 
     # CORS Settings
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:8080",
+        ...,
         description="Comma-separated list of allowed CORS origins"
     )
-    cors_allow_credentials: bool = Field(default=True, description="Allow credentials in CORS")
-    cors_max_age: int = Field(default=3600, ge=0, le=86400, description="CORS preflight cache max age in seconds")
+    cors_allow_credentials: bool = Field(..., description="Allow credentials in CORS")
+    cors_max_age: int = Field(..., ge=0, le=86400, description="CORS preflight cache max age in seconds")
     cors_allow_headers: str = Field(
-        default="Authorization,Content-Type",
+        ...,
         description="Comma-separated list of allowed CORS headers"
     )
     cors_expose_headers: str = Field(
-        default="X-Total-Count,X-Page-Count",
+        ...,
         description="Comma-separated list of exposed CORS headers"
     )
     cors_allow_methods: str = Field(
-        default="GET,POST,PUT,DELETE,OPTIONS",
+        ...,
         description="Comma-separated list of allowed CORS methods"
     )
 
     # Environment
-    environment: EnvironmentOption = Field(default=EnvironmentOption.LOCAL, description="Environment")
+    environment: EnvironmentOption = Field(..., description="Environment")
 
-    # Authentication paths
+    # File Upload Settings
+    max_file_size: int = Field(..., ge=1024, le=104857600, description="Maximum file upload size in bytes")
+    allowed_file_types: str = Field(
+        ...,
+        description="Comma-separated list of allowed file types"
+    )
+
+    # Security Headers Settings
+    security_headers_enabled: bool = Field(..., description="Enable security headers")
+    content_security_policy: str = Field(
+        ...,
+        description="Content-Security-Policy header value"
+    )
+    x_frame_options: str = Field(..., description="X-Frame-Options header value")
+    x_content_type_options: str = Field(..., description="X-Content-Type-Options header value")
+    referrer_policy: str = Field(
+        ...,
+        description="Referrer-Policy header value"
+    )
+
+    # Core Threshold
+    core_threshold: int = Field(..., ge=0, description="Core threshold value")
+
+    # Authentication paths (can be JSON string or comma-separated string)
     skip_auth_paths: Set[str] = Field(
-        default={"/health", "/docs", "/redoc", "/openapi.json"},
-        description="Paths that skip authentication"
+        default={"/health", "/docs", "/redoc", "/openapi.json", "/api/v1/public/auth/login", "/api/v1/public/auth/refresh", "/api/v1/public/auth/register", "/api/v1/public/auth/forgot-password", "/api/v1/public/auth/reset-password", "/api/v1/public/auth/verify-otp", "/api/v1/public/auth/resend-otp"},
+        description="Paths that skip authentication (can be JSON array string or comma-separated)"
     )
     refresh_paths: Set[str] = Field(
-        default={"/api/v1/auth/refresh"},
-        description="Paths that require refresh token"
+        default={"/api/v1/public/auth/refresh"},
+        description="Paths that require refresh token (can be JSON array string or comma-separated)"
     )
 
     @property
@@ -260,6 +284,51 @@ class Settings(BaseSettings):
     def cors_allow_methods_list(self) -> list[str]:
         """Get CORS allow methods as a list."""
         return [method.strip() for method in self.cors_allow_methods.split(",") if method.strip()]
+
+    @property
+    def allowed_file_types_list(self) -> list[str]:
+        """Get allowed file types as a list."""
+        return [file_type.strip().lower() for file_type in self.allowed_file_types.split(",") if file_type.strip()]
+
+    @field_validator("skip_auth_paths", mode="before")
+    @classmethod
+    def parse_skip_auth_paths(cls, v: Any) -> Set[str]:
+        """Parse skip_auth_paths from JSON string, comma-separated string, or set/list."""
+        if isinstance(v, set):
+            return {str(item) for item in v}  # type: ignore[arg-type]
+        if isinstance(v, list):
+            return {str(item) for item in v}  # type: ignore[arg-type]
+        if isinstance(v, str):
+            # Try to parse as JSON first
+            try:
+                parsed: Any = json.loads(v)
+                if isinstance(parsed, list):
+                    return {str(item) for item in parsed}  # type: ignore[arg-type]
+            except (json.JSONDecodeError, ValueError):
+                pass
+            # Fall back to comma-separated string
+            return {path.strip() for path in v.split(",") if path.strip()}
+        return set()
+
+    @field_validator("refresh_paths", mode="before")
+    @classmethod
+    def parse_refresh_paths(cls, v: Any) -> Set[str]:
+        """Parse refresh_paths from JSON string, comma-separated string, or set/list."""
+        if isinstance(v, set):
+            return {str(item) for item in v}  # type: ignore[arg-type]
+        if isinstance(v, list):
+            return {str(item) for item in v}  # type: ignore[arg-type]
+        if isinstance(v, str):
+            # Try to parse as JSON first
+            try:
+                parsed: Any = json.loads(v)
+                if isinstance(parsed, list):
+                    return {str(item) for item in parsed}  # type: ignore[arg-type]
+            except (json.JSONDecodeError, ValueError):
+                pass
+            # Fall back to comma-separated string
+            return {path.strip() for path in v.split(",") if path.strip()}
+        return set()
 
     @field_validator("secret_key")
     @classmethod

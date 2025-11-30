@@ -1,8 +1,9 @@
-from typing import List, Optional
+"""User service for business logic."""
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.models.user import User
-from app.schemas.user import UserCreate, UserUpdate, UserResponse
+from app.models.user import User, UserRole, Role
+from app.models.college import College, CollegeUser
+from app.models.enums import UserStatusEnum
 from app.core.security import hash_password
 from app.core.logger import get_app_logger
 
@@ -15,157 +16,172 @@ class UserService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create_user(self, user_data: UserCreate) -> UserResponse:
-        """Create a new user.
+    async def register_admin(
+        self,
+        email: str,
+        password: str,
+        full_name: str,
+        college_id: int
+    ) -> User:
+        """Register a new admin user with college association.
+        
+        Automatically assigns the "CollegeAdmin" role to the user.
 
         Parameters
         ----------
-        user_data : UserCreate
-            User creation data.
+        email : str
+            User email.
+        password : str
+            User password.
+        full_name : str
+            User full name.
+        college_id : int
+            College ID to associate the admin with.
 
         Returns
         -------
-        UserResponse
-            Created user.
+        User
+            Created user object.
 
         Raises
         ------
         ValueError
-            If user creation fails.
+            If registration fails (e.g., user exists, college not found, CollegeAdmin role not found).
         """
         # Check if user already exists
-        result = await self.db.execute(select(User).where(User.email == user_data.email))
+        result = await self.db.execute(select(User).where(User.email == email))
         existing_user = result.scalar_one_or_none()
 
         if existing_user:
             raise ValueError("User with this email already exists")
 
-        # Hash password
-        password_hash = await hash_password(user_data.password)
-
-        # Create user
-        user = User(
-            email=user_data.email,
-            password_hash=password_hash,
-            full_name=user_data.full_name,
-            is_active=True
+        # Validate college exists
+        college_result = await self.db.execute(
+            select(College).where(College.id == college_id, College.deleted_at.is_(None))
         )
+        college = college_result.scalar_one_or_none()
 
-        self.db.add(user)
-        await self.db.flush()
+        if not college:
+            raise ValueError("College not found")
 
-        return UserResponse.model_validate(user)
+        # Get CollegeAdmin role by name
+        role_result = await self.db.execute(
+            select(Role).where(Role.name == "CollegeAdmin")
+        )
+        role = role_result.scalar_one_or_none()
 
-    async def get_user_by_id(self, user_id: int) -> Optional[UserResponse]:
-        """Get user by ID.
+        if not role:
+            raise ValueError("CollegeAdmin role not found")
+
+        try:
+            # Hash password
+            password_hash = await hash_password(password)
+
+            # Create user
+            user = User(
+                email=email,
+                password_hash=password_hash,
+                name=full_name,
+                status=UserStatusEnum.ACTIVE
+            )
+
+            self.db.add(user)
+            await self.db.flush()
+
+            # Create user-role association with CollegeAdmin role
+            user_role = UserRole(
+                user_id=user.id,
+                role_id=role.id
+            )
+            self.db.add(user_role)
+
+            # Create college-user association
+            college_user = CollegeUser(
+                user_id=user.id,
+                college_id=college_id,
+                is_primary=True  # Can be set to True if this is the primary admin
+            )
+            self.db.add(college_user)
+
+            await self.db.flush()
+
+            return user
+        except Exception as e:
+            logger.error(
+                f"Error in register_admin service method: {str(e)}",
+                exc_info=True,
+                email=email,
+                college_id=college_id
+            )
+            raise
+
+    async def associate_user_with_college(
+        self,
+        user_id: int,
+        college_id: int,
+        is_primary: bool = False
+    ) -> CollegeUser:
+        """Associate an existing user with a college.
+        
+        Creates a relationship in the college_users table.
 
         Parameters
         ----------
         user_id : int
-            User ID.
+            User ID to associate with college.
+        college_id : int
+            College ID to associate the user with.
+        is_primary : bool
+            Whether this is the primary college for the user.
 
         Returns
         -------
-        Optional[UserResponse]
-            User if found, None otherwise.
-        """
-        result = await self.db.execute(select(User).where(User.user_id == user_id))
-        user = result.scalar_one_or_none()
-
-        if not user:
-            return None
-
-        return UserResponse.model_validate(user)
-
-    async def list_users(self, skip: int = 0, limit: int = 100) -> List[UserResponse]:
-        """List users with pagination.
-
-        Parameters
-        ----------
-        skip : int
-            Number of records to skip.
-        limit : int
-            Maximum number of records to return.
-
-        Returns
-        -------
-        List[UserResponse]
-            List of users.
-        """
-        result = await self.db.execute(
-            select(User)
-            .offset(skip)
-            .limit(limit)
-        )
-        users = result.scalars().all()
-
-        return [UserResponse.model_validate(user) for user in users]
-
-    async def update_user(self, user_id: int, user_data: UserUpdate) -> Optional[UserResponse]:
-        """Update user.
-
-        Parameters
-        ----------
-        user_id : int
-            User ID.
-        user_data : UserUpdate
-            User update data.
-
-        Returns
-        -------
-        Optional[UserResponse]
-            Updated user if found, None otherwise.
+        CollegeUser
+            Created college-user relationship object.
 
         Raises
         ------
         ValueError
-            If update fails.
+            If association fails (e.g., user not found, college not found, relationship already exists).
         """
-        result = await self.db.execute(select(User).where(User.user_id == user_id))
-        user = result.scalar_one_or_none()
+        # Validate user exists and is not deleted
+        user_result = await self.db.execute(
+            select(User).where(User.id == user_id, User.deleted_at.is_(None))
+        )
+        user = user_result.scalar_one_or_none()
 
         if not user:
-            return None
+            raise ValueError("User not found")
 
-        # Check if email is being changed and if it's already taken
-        if user_data.email and user_data.email != user.email:
-            email_check = await self.db.execute(select(User).where(User.email == user_data.email))
-            if email_check.scalar_one_or_none():
-                raise ValueError("User with this email already exists")
+        # Validate college exists and is not deleted
+        college_result = await self.db.execute(
+            select(College).where(College.id == college_id, College.deleted_at.is_(None))
+        )
+        college = college_result.scalar_one_or_none()
 
-        # Update user fields
-        if user_data.email is not None:
-            user.email = user_data.email
-        if user_data.full_name is not None:
-            user.full_name = user_data.full_name
-        if user_data.is_active is not None:
-            user.is_active = user_data.is_active
+        if not college:
+            raise ValueError("College not found")
 
+        # Check if relationship already exists
+        existing_result = await self.db.execute(
+            select(CollegeUser).where(
+                CollegeUser.user_id == user_id,
+                CollegeUser.college_id == college_id
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing:
+            raise ValueError("User is already associated with this college")
+
+        # Create college-user association
+        college_user = CollegeUser(
+            user_id=user_id,
+            college_id=college_id,
+            is_primary=is_primary
+        )
+        self.db.add(college_user)
         await self.db.flush()
 
-        return UserResponse.model_validate(user)
-
-    async def delete_user(self, user_id: int) -> bool:
-        """Delete user.
-
-        Parameters
-        ----------
-        user_id : int
-            User ID.
-
-        Returns
-        -------
-        bool
-            True if user was deleted, False if not found.
-        """
-        result = await self.db.execute(select(User).where(User.user_id == user_id))
-        user = result.scalar_one_or_none()
-
-        if not user:
-            return False
-
-        await self.db.delete(user)
-        await self.db.flush()
-
-        return True
+        return college_user
 

@@ -61,6 +61,19 @@ logs/
 *.sqlite
 *.sqlite3
 
+# SQL Files (scripts, dumps, backups)
+*.sql
+*.sql.bak
+*.sql.dump
+*.dump
+*.sql.gz
+*.sql.zip
+
+# Text Files (credentials, notes, etc.)
+*.txt
+!README.txt
+credentials.txt
+
 # Docker
 docker-compose.override.yml
 

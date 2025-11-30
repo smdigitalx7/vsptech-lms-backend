@@ -7,7 +7,7 @@ from alembic import context
 
 # Import your models' Base
 from app.models.base import Base
-from app.models.user import User  # Import all models so Alembic can detect them
+
 
 # Import settings
 from app.core.config import settings

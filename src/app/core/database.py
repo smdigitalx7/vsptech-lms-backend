@@ -9,11 +9,15 @@ from app.core.config import (
 )
 from app.core.logger import get_logger
 
-logger = get_logger(__name__)
-
-
-# Database Configuration
+# ============================================================================
+# Constants
+# ============================================================================
 DATABASE_URL = settings.postgres_url
+
+# ============================================================================
+# Module-level Variables
+# ============================================================================
+logger = get_logger(__name__)
 
 # Create async engine with configurable pool settings from environment
 async_engine = create_async_engine(
@@ -53,7 +57,7 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
             # Commit transaction on successful completion
             await session.commit()
         except Exception as e:
-            logger.error(f"Database session error: {e}")
+            logger.error(f"Database session error: {e}", exc_info=True)
             await session.rollback()
             raise
         finally:

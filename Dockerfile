@@ -1,80 +1,93 @@
-# --------- Builder Stage ---------
-FROM python:3.13-bookworm AS builder
+# syntax=docker/dockerfile:1.4
+###############################################################################
+# TestVerse-Dev Application
+# Builder — create a clean virtualenv with only runtime deps (uses `uv`)
+###############################################################################
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
-# Install build dependencies and uv in a single layer
-RUN apt-get update && apt-get install --no-install-recommends -y \
-    build-essential \
-    libuv1-dev \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Set up uv environment path
-ENV PATH="/root/.local/bin:${PATH}"
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    VENV_DIR=/app/.venv \
+    PATH=/app/.venv/bin:$PATH \
+    UV_LOCKFILE=/app/uv.lock
 
 WORKDIR /app
 
-# Copy dependency files first (better caching)
-COPY pyproject.toml uv.lock* ./
+# Copy manifest/lock files first to maximize cache reuse
+COPY pyproject.toml uv.lock* /app/
 
-# Generate lock file and install dependencies with cache mount
+# Use BuildKit caches for uv/pip; create venv and install only runtime deps
 RUN --mount=type=cache,target=/root/.cache/uv \
-    [ -f uv.lock ] || uv lock --quiet
+    --mount=type=cache,target=/root/.cache/pip \
+    uv lock --quiet || true \
+    && python -m venv $VENV_DIR \
+    && . $VENV_DIR/bin/activate \
+    && python -m pip install --upgrade pip setuptools wheel \
+    && uv sync --locked --no-install-project --no-dev \
+    && find $VENV_DIR -name "*.pyc" -delete
 
-# Install dependencies without project
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-install-project
-
-# Copy source code
+# Copy source after deps to keep the deps layer cacheable
 COPY src/ /app/src/
 
-# Install project with cache mount
+# Install the project into the venv (entry points/scripts)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked
+    . $VENV_DIR/bin/activate \
+    && uv sync --locked --no-dev
 
-# --------- Final Stage ---------
-FROM python:3.13-slim-bookworm
+# Clean builder caches (best-effort)
+RUN rm -rf /root/.cache/uv /root/.cache/pip || true
 
-# Set environment variables for container optimization
+###############################################################################
+# Runtime — minimal, non-root, only runtime bits
+###############################################################################
+FROM python:3.13-slim-bookworm AS runtime
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONHASHSEED=random \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    VIRTUAL_ENV=/app/.venv \
-    PATH="/app/.venv/bin:$PATH" \
-    PORT=8000
+    PATH=/app/.venv/bin:$PATH \
+    VENV_DIR=/app/.venv \
+    ENVIRONMENT=production \
+    DEBUG=false
 
-# Install minimal system dependencies
+# Install only minimal runtime system packages and clean apt lists in the same RUN
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    postgresql-client \
+    ca-certificates \
     curl \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user with restricted group
-RUN groupadd -r appgroup && useradd -r -g appgroup -u 1000 appuser
+# Create non-root user and directories in one layer
+RUN groupadd -r appgroup && useradd -r -g appgroup -u 1000 appuser \
+    && mkdir -p /app/logs /app/tmp /app/.venv \
+    && chown -R appuser:appgroup /app
 
-# Set working directory
 WORKDIR /app
 
-# Copy virtual environment and source code from builder stage
+# Copy venv and app from builder; set ownership
 COPY --from=builder --chown=appuser:appgroup /app/.venv /app/.venv
 COPY --from=builder --chown=appuser:appgroup /app/src /app/src
 
-# Create logs directory and fix ownership in one step
-RUN mkdir -p /app/logs && chown -R appuser:appgroup /app
-
-# Switch to non-root user before exposing
+# Switch to non-root
 USER appuser
 
-# Expose port (default 8000, can be overridden with PORT env var)
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8000}/api/v1/health/ready || exit 1
+# Healthcheck tuned for production readiness; adjust start-period if you run migrations on boot
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health/ready || exit 1
 
-# Default command for development
-CMD ["sh", "-c", "uvicorn src.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --reload"]
+# Default command: single worker (scale with orchestration)
+CMD ["gunicorn", "src.app.main:app", \
+    "-w", "1", \
+    "-k", "uvicorn.workers.UvicornWorker", \
+    "--threads", "2", \
+    "-b", "0.0.0.0:8000", \
+    "--access-logfile", "-", \
+    "--error-logfile", "-", \
+    "--log-level", "info", \
+    "--max-requests", "500", \
+    "--max-requests-jitter", "25"]
 
